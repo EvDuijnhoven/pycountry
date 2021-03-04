@@ -2,7 +2,6 @@
 """pycountry"""
 
 import os.path
-import unicodedata
 import pycountry.db
 
 
@@ -21,20 +20,20 @@ LOCALES_DIR = resource_filename('pycountry', 'locales')
 DATABASE_DIR = resource_filename('pycountry', 'databases')
 
 
-def remove_accents(input_str):
-    # Borrowed from https://stackoverflow.com/a/517974/1509718
-    nfkd_form = unicodedata.normalize('NFKD', input_str)
-    return u"".join([c for c in nfkd_form if not unicodedata.combining(c)])
+class Country(pycountry.db.Data):
+    name_keys = ['name', 'official_name', 'comment']
+    code_keys = ['alpha_2', 'alpha_3', 'numeric']
 
 
 class ExistingCountries(pycountry.db.Database):
     """Provides access to an ISO 3166 database (Countries)."""
 
+    data_class_base = Country
     data_class_name = 'Country'
     root_key = '3166-1'
 
     def search_fuzzy(self, query):
-        query = remove_accents(query.strip().lower())
+        query = pycountry.db.Data.remove_accents(query.strip().lower())
 
         # A country-code to points mapping for later sorting countries
         # based on the query's matching incidence.
@@ -52,42 +51,27 @@ class ExistingCountries(pycountry.db.Database):
 
         # Prio 2: exact matches on subdivision names
         for candidate in subdivisions:
-            for v in candidate._fields.values():
-                if v is None:
-                    continue
-                v = remove_accents(v.lower())
-                # Some names include alternative versions which we want to
-                # match exactly.
-                for v in v.split(';'):
-                    if v == query:
-                        add_result(candidate.country, 49)
-                        break
+            if query in candidate._match_values:
+                add_result(candidate.country, 49)
+                break
 
         # Prio 3: partial matches on country names
         for candidate in self:
             # Higher priority for a match on the common name
-            for v in [candidate._fields.get('name'),
-                      candidate._fields.get('official_name'),
-                      candidate._fields.get('comment')]:
-                if v is None:
-                    continue
-                v = remove_accents(v.lower())
+            for v in candidate._match_names:
                 if query in v:
                     # This prefers countries with a match early in their name
                     # and also balances against countries with a number of
                     # partial matches and their name containing 'new' in the
                     # middle
-                    add_result(candidate, max([5, 30-(2*v.find(query))]))
+                    add_result(candidate, max([5, 30 - (2 * v.find(query))]))
                     break
 
         # Prio 4: partial matches on subdivision names
         for candidate in subdivisions:
-            v = candidate._fields.get('name')
-            if v is None:
-                continue
-            v = remove_accents(v.lower())
-            if query in v:
-                add_result(candidate.country, max([1, 5-v.find(query)]))
+            for v in candidate._match_names:
+                if query in v:
+                    add_result(candidate.country, max([1, 5 - v.find(query)]))
 
         if not results:
             raise LookupError(query)
@@ -143,14 +127,12 @@ class LanguageFamilies(pycountry.db.Database):
 class Subdivision(pycountry.db.Data):
 
     def __init__(self, **kw):
+        kw['country_code'] = kw['code'].split('-')[0]
         if 'parent' in kw:
-            kw['parent_code'] = kw['parent']
+            kw['parent_code'] = '%s-%s' % (kw['country_code'], kw['parent'])
         else:
             kw['parent_code'] = None
         super(Subdivision, self).__init__(**kw)
-        self.country_code = self.code.split('-')[0]
-        if self.parent_code is not None:
-            self.parent_code = '%s-%s' % (self.country_code, self.parent_code)
 
     @property
     def country(self):
@@ -164,7 +146,6 @@ class Subdivision(pycountry.db.Data):
 
 
 class Subdivisions(pycountry.db.Database):
-
     # Note: subdivisions can be hierarchical to other subdivisions. The
     # parent_code attribute is related to other subdivisons, *not*
     # the country!

@@ -1,18 +1,24 @@
 # vim:fileencoding=utf-8
-
+import unicodedata
 from io import open
 import json
 import logging
 import threading
 
-
 logger = logging.getLogger('pycountry.db')
 
 
 class Data:
+    local_keys = ['_fields', '_match_fields', '_match_names', '_match_values']
+    name_keys = ['name']
+    code_keys = ['code']
 
     def __init__(self, **fields):
         self._fields = fields
+        self._match_fields = {k: self.remove_accents(v.lower()) for (k, v) in self._fields.items()
+                              if v is not None and (k in self.name_keys or k in self.code_keys)}
+        self._match_values = [f for v in self._match_fields.values() for f in v.split(';')]
+        self._match_names = [v for (k, v) in self._match_fields.items() if k in self.name_keys]
 
     def __getattr__(self, key):
         if key not in self._fields:
@@ -20,7 +26,7 @@ class Data:
         return self._fields[key]
 
     def __setattr__(self, key, value):
-        if key != '_fields':
+        if key not in self.local_keys:
             self._fields[key] = value
         super(Data, self).__setattr__(key, value)
 
@@ -32,6 +38,12 @@ class Data:
     def __dir__(self):
         return dir(self.__class__) + list(self._fields)
 
+    @staticmethod
+    def remove_accents(input_str):
+        # Borrowed from https://stackoverflow.com/a/517974/1509718
+        nfkd_form = unicodedata.normalize('NFKD', input_str)
+        return u"".join([c for c in nfkd_form if not unicodedata.combining(c)])
+
 
 def lazy_load(f):
     def load_if_needed(self, *args, **kw):
@@ -39,11 +51,11 @@ def lazy_load(f):
             with self._load_lock:
                 self._load()
         return f(self, *args, **kw)
+
     return load_if_needed
 
 
 class Database:
-
     data_class_base = Data
     data_class_name = None
     root_key = None
